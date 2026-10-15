@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# 数据和输出
+data/raw/
+data/processed/
+1/
+outputs/
+*.npz
+*.pth
+
+# IDE
+.vscode/
+.idea/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 虚拟环境
+venv/
+env/
+
+# Trae 编辑器临时目录
+.trae-html-share-packages/
+
+# 个人文档/论文/教材/临时截图（不随项目公开）
+wen_ti/
+实体小车/
+_ref/
+experiments/
+project-overview/
+*.doc
+*.docx
+实体小车完整参数手册.md

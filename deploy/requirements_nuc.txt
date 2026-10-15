@@ -1,0 +1,4 @@
+# NUC 端（Ubuntu 20.04, Python 3.8, ROS Noetic）pip 依赖
+# 安装：pip3 install -r requirements_nuc.txt
+onnxruntime>=1.15
+numpy>=1.21

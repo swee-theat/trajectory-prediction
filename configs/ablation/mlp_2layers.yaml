@@ -1,0 +1,3 @@
+# 消融实验：2 层 MLP 编码器
+model:
+  num_mlp_layers: 2

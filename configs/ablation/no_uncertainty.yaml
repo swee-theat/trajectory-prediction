@@ -1,0 +1,3 @@
+# 消融实验：去掉不确定性估计模块
+model:
+  use_uncertainty: false

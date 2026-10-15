@@ -1,0 +1,3 @@
+# 参数扫描：hidden_dim = 512
+model:
+  hidden_dim: 512

@@ -1,0 +1,63 @@
+# ============================================================
+# 轻量化多模态轨迹预测系统 — 默认配置
+# ============================================================
+
+# 模型参数
+model:
+  input_dim: 11            # 输入特征维度 (11=完整+航向+曲率, 9=旧版, 6=无上下文, 4=最小)
+  hidden_dim: 128          # MLP 隐藏层维度
+  num_mlp_layers: 3        # MLP 编码器层数 (2/3/4)
+  dropout: 0.1             # Dropout 比率
+  num_modes: 5             # 多模态数量 K (1/2/3/5)
+  use_uncertainty: true    # 是否启用不确定性估计
+  use_interaction: false   # 是否启用两车交互编码（第三阶段）
+  pooling: "attention"     # 池化方式: "attention" | "mean" | "lstm"
+  use_temporal_conv: true  # 是否启用时序卷积 (depthwise conv1d)
+
+# 数据参数
+data:
+  root: "./data/raw"       # 原始 CSV 数据根目录
+  processed_dir: "./data/processed"  # 预处理后数据输出目录
+  obs_len: 20              # 观测帧数 T_obs
+  pred_len: 30             # 预测帧数 T_pred
+  batch_size: 64           # 训练 batch 大小
+  num_workers: 4           # DataLoader 进程数（Windows 建议 ≤4）
+  augmentation:
+    enable: true
+    rotation_range: 0.5236  # 随机旋转范围 [-30°, +30°]（车辆正常转向范围，避免倒车）
+    scale_range: [0.9, 1.1]  # 随机缩放范围
+    noise_std: 0.02          # 高斯噪声标准差
+
+# 训练参数
+training:
+  epochs: 80
+  lr: 0.001                # 初始学习率
+  weight_decay: 0.0001     # AdamW 权重衰减
+  warmup_epochs: 5         # 学习率预热 epoch 数
+  lr_min: 0.000001         # 最小学习率
+  grad_clip_norm: 1.0      # 梯度裁剪 max_norm
+  use_amp: true            # 自动混合精度
+  seed: 42
+
+# 损失函数参数
+loss:
+  lambda_traj: 0.7         # 轨迹损失权重
+  lambda_mode: 0.3         # 模态分类损失权重
+  lambda_unc: 0.0          # 不确定性 NLL 损失权重（0.0=关闭，0.05~0.1=启用）
+  lambda_neighbor: 0.4     # 邻居轨迹监督权重（第三阶段）
+  lambda_collision: 0.1    # 碰撞惩罚权重（第三阶段）
+  collision_margin: 2.0    # 碰撞距离阈值（米），与检测阈值一致
+  traj_loss_type: "smooth_l1"  # 轨迹损失类型: "smooth_l1" | "mse" | "l1"
+
+# 早停参数
+early_stopping:
+  patience: 15             # 容忍 epoch 数
+  metric: "val_min_ade"    # 监控指标
+  mode: "min"              # 最小化
+
+# 日志与输出
+logging:
+  log_dir: "./outputs/logs"
+  checkpoint_dir: "./outputs/checkpoints"
+  save_top_k: 3            # 保存前 K 个最佳 checkpoint
+  log_every_n_steps: 50    # 每 N 步打印一次日志

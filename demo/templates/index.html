@@ -1,0 +1,1001 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>轻量化多模态轨迹预测系统</title>
+    <style>
+        :root {
+            --bg: #f0f2f5;
+            --card-bg: #ffffff;
+            --text: #1a1a2e;
+            --sub: #6b7280;
+            --primary: #4f46e5;
+            --primary-hover: #4338ca;
+            --border: #e5e7eb;
+            --red: #ef4444;
+            --teal: #14b8a6;
+            --purple: #8b5cf6;
+            --shadow: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.06);
+            --radius: 10px;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+
+        .topbar {
+            background: linear-gradient(135deg, #1e1b4b 0%, #312e81 50%, #3730a3 100%);
+            color: white;
+            padding: 16px 32px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        .topbar h1 { font-size: 20px; font-weight: 700; }
+        .topbar .badge-row { display: flex; gap: 10px; flex-wrap: wrap; }
+        .topbar .chip {
+            background: rgba(255,255,255,.18);
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 13px;
+            backdrop-filter: blur(4px);
+        }
+
+        .main {
+            display: grid;
+            grid-template-columns: 1fr 340px;
+            gap: 20px;
+            padding: 20px 28px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        @media (max-width: 1000px) {
+            .main { grid-template-columns: 1fr; }
+        }
+
+        .card {
+            background: var(--card-bg);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            padding: 20px;
+            margin-bottom: 16px;
+        }
+        .card h3 {
+            font-size: 15px;
+            color: var(--text);
+            margin-bottom: 14px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid var(--primary);
+        }
+
+        #canvas {
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            background: #fafbfc;
+            cursor: crosshair;
+            display: block;
+            /* 固定像素宽度，不随CSS缩放，避免坐标偏移 */
+            max-width: 100%;
+            height: auto;
+        }
+        .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+        button {
+            padding: 9px 18px;
+            font-size: 14px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all .15s;
+        }
+        .btn-primary { background: var(--primary); color: #fff; }
+        .btn-primary:hover { background: var(--primary-hover); }
+        .btn-outline { background: #fff; color: var(--primary); border: 1.5px solid var(--primary); }
+        .btn-outline:hover { background: #eef2ff; }
+        .btn-danger { background: #fff; color: var(--red); border: 1.5px solid var(--red); }
+        .btn-danger:hover { background: #fef2f2; }
+        .btn-sm { padding: 5px 12px; font-size: 13px; }
+
+        .mode-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 6px 0;
+        }
+        .mode-dot {
+            width: 14px; height: 14px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .mode-track {
+            flex: 1;
+            height: 22px;
+            background: #f3f4f6;
+            border-radius: 11px;
+            overflow: hidden;
+            position: relative;
+        }
+        .mode-fill {
+            height: 100%;
+            border-radius: 11px;
+            transition: width 0.5s ease;
+            display: flex;
+            align-items: center;
+            padding-left: 10px;
+            font-size: 12px;
+            font-weight: 700;
+            color: #fff;
+        }
+
+        .stat-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        .stat-item {
+            background: #f9fafb;
+            padding: 10px 12px;
+            border-radius: 8px;
+        }
+        .stat-label { font-size: 12px; color: var(--sub); }
+        .stat-value { font-size: 18px; font-weight: 700; color: var(--text); }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        th, td {
+            text-align: left;
+            padding: 8px 10px;
+            border-bottom: 1px solid var(--border);
+        }
+        th { background: #f9fafb; font-weight: 600; }
+        .best-row { background: #eef2ff; }
+
+        .badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 700;
+        }
+        .badge-high { background: #d1fae5; color: #065f46; }
+        .badge-mid  { background: #fef3c7; color: #92400e; }
+        .badge-low  { background: #fee2e2; color: #991b1b; }
+
+        #csvInput { display: none; }
+
+        .hint {
+            font-size: 12px;
+            color: var(--sub);
+            margin-top: 6px;
+        }
+
+        .toast {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 12px 24px;
+            border-radius: 8px;
+            color: #fff;
+            font-weight: 600;
+            z-index: 999;
+            animation: fadeIn .3s;
+        }
+        .toast-error { background: #dc2626; }
+        .toast-info { background: #2563eb; }
+        @keyframes fadeIn { from { opacity: 0; top: 0; } to { opacity: 1; top: 20px; } }
+    </style>
+</head>
+<body>
+
+<div class="topbar">
+    <div>
+        <h1>轻量化多模态轨迹预测系统</h1>
+    </div>
+    <div class="badge-row">
+        <span class="chip" id="chipParams">145K 参数</span>
+        <span class="chip" id="chipDevice">--</span>
+        <span class="chip">K=5 模态</span>
+        <span class="chip">20->30 帧</span>
+    </div>
+</div>
+
+<div class="main">
+
+    <div>
+        <div class="card">
+            <h3>交互式轨迹预测</h3>
+            <canvas id="canvas" width="800" height="500"></canvas>
+            <div class="hint">
+                在画布上点击添加轨迹点（至少20个）| 拖拽节点微调 | 滚轮缩放 | 右键拖拽平移 | 点击示例按钮快速体验
+            </div>
+            <div class="btn-row">
+                <button class="btn-primary" onclick="runPrediction()">开始预测</button>
+                <button id="nbrModeBtn" class="btn-outline" onclick="toggleNeighborMode()">画邻居车</button>
+                <button class="btn-outline" onclick="loadExample('straight')">直线示例</button>
+                <button class="btn-outline" onclick="loadExample('curve')">弯道示例</button>
+                <button class="btn-outline" onclick="loadExample('u_turn')">掉头示例</button>
+                <button class="btn-outline" onclick="loadExample('lane_change')">换道示例</button>
+                <button class="btn-outline" onclick="loadExample('head_on')">会车示例</button>
+                <button class="btn-outline" onclick="loadExample('follow')">跟车示例</button>
+                <button class="btn-outline" onclick="document.getElementById('csvInput').click()">上传CSV</button>
+                <input type="file" id="csvInput" accept=".csv" onchange="handleCSV(event)">
+                <button class="btn-danger btn-sm" onclick="clearAll()">清空</button>
+            </div>
+            <div class="hint" id="nbrHint" style="display:none;color:var(--red);font-weight:600;">
+                邻居车模式：点击画布绘制第二辆车轨迹（红色），再点一次按钮回到主车模式
+            </div>
+        </div>
+
+        <div class="card" id="probCard" style="display:none;">
+            <h3>模态概率分布</h3>
+            <div id="probBars"></div>
+        </div>
+    </div>
+
+    <div>
+        <div class="card" id="summaryCard" style="display:none;">
+            <h3>预测摘要</h3>
+            <div style="margin-bottom:12px;">
+                <span style="font-size:14px;">最佳模态：</span>
+                <span style="font-size:22px;font-weight:700;color:var(--primary);" id="bestModeLabel">-</span>
+            </div>
+            <div style="margin-bottom:12px;">
+                <span style="font-size:14px;">置信度：</span>
+                <span style="font-size:22px;font-weight:700;" id="confPct">-</span>
+                <span id="confBadge"></span>
+            </div>
+            <div class="stat-grid">
+                <div class="stat-item">
+                    <div class="stat-label">观测点数</div>
+                    <div class="stat-value" id="obsPts">-</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">预测时长</div>
+                    <div class="stat-value" id="predHorizon">-</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">平均不确定度</div>
+                    <div class="stat-value" id="avgUnc">-</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">模型参数量</div>
+                    <div class="stat-value" id="nParams">-</div>
+                </div>
+            </div>
+            <div id="collisionBox" style="display:none;margin-top:12px;padding:10px 12px;border-radius:8px;font-weight:600;"></div>
+        </div>
+
+        <div class="card" id="detailCard" style="display:none;">
+            <h3>各模态详情</h3>
+            <table>
+                <thead>
+                    <tr><th>模态</th><th>概率</th><th>终点(m)</th><th>行程(m)</th><th>不确定度</th></tr>
+                </thead>
+                <tbody id="detailBody"></tbody>
+            </table>
+        </div>
+
+        <div class="card">
+            <h3>API 接口</h3>
+            <div style="font-size:13px;color:var(--sub);line-height:1.8;">
+                <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;">POST /api/v1/predict</code>
+                坐标序列预测<br>
+                <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;">POST /api/v1/predict_csv</code>
+                上传 Argoverse CSV<br>
+                <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;">GET /api/v1/examples</code>
+                获取内置示例<br>
+                <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;">GET /api/v1/model_info</code>
+                模型信息
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// ── 全局状态 ──────────────────────────────────────
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let points = [];
+let neighborPoints = [];       // 第二辆车（邻居）轨迹点
+let drawNeighborMode = false;  // 是否处于「画邻居车」模式
+let selectedIdx = null;
+let selectedIsNeighbor = false; // 当前拖拽选中的节点是否属于邻居
+let predData = null;
+let groundTruth = null;
+
+// 预定义足够多的颜色（随模型模态数动态截取，不硬编码 K）
+const COLOR_PALETTE = ['#ef4444', '#14b8a6', '#8b5cf6', '#f59e0b', '#ec4899',
+                       '#06b6d4', '#84cc16', '#f97316', '#a855f7', '#e11d48'];
+let COLORS = COLOR_PALETTE;
+let NUM_MODES = 5;  // 由后端 API 动态设定
+const OBS_MIN = 20;
+let ORIGIN_X = 60;
+let ORIGIN_Y = 280;
+let SCALE = 50;
+const MAX_ELLIPSE_PX = 40;  // 不确定性椭圆最大半轴像素（防止未校准方差画出巨型椭圆）
+let isPanning = false;
+let panStartX = 0;
+let panStartY = 0;
+
+// ── Canvas 坐标（修正CSS缩放） ────────────────────
+function canvasCoords(e) {
+    const rect = canvas.getBoundingClientRect();
+    // 修正：canvas 的 CSS 显示尺寸可能与实际像素不一致
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return {
+        sx: (e.clientX - rect.left) * scaleX,
+        sy: (e.clientY - rect.top) * scaleY,
+    };
+}
+
+function toScreen(mx, my) {
+    return { x: ORIGIN_X + mx * SCALE, y: ORIGIN_Y - my * SCALE };
+}
+function toMeter(sx, sy) {
+    return { x: (sx - ORIGIN_X) / SCALE, y: (ORIGIN_Y - sy) / SCALE };
+}
+
+// ── Toast 消息 ────────────────────────────────────
+function showToast(msg, type) {
+    const el = document.createElement('div');
+    el.className = 'toast toast-' + type;
+    el.textContent = msg;
+    document.body.appendChild(el);
+    setTimeout(function() { el.remove(); }, 3000);
+}
+
+// ── 绘图 ──────────────────────────────────────────
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 网格
+    ctx.strokeStyle = '#e5e7eb';
+    ctx.lineWidth = 0.5;
+    for (let i = 0; i < canvas.width; i += 50) {
+        ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, canvas.height); ctx.stroke();
+    }
+    for (let i = 0; i < canvas.height; i += 50) {
+        ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(canvas.width, i); ctx.stroke();
+    }
+
+    // 坐标轴
+    ctx.strokeStyle = '#9ca3af';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(ORIGIN_X, 0); ctx.lineTo(ORIGIN_X, canvas.height); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, ORIGIN_Y); ctx.lineTo(canvas.width, ORIGIN_Y); ctx.stroke();
+
+    // 观测轨迹
+    if (points.length >= 2) {
+        ctx.strokeStyle = '#2563eb';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        const p0 = toScreen(points[0].mx, points[0].my);
+        ctx.moveTo(p0.x, p0.y);
+        for (let i = 1; i < points.length; i++) {
+            const pi = toScreen(points[i].mx, points[i].my);
+            ctx.lineTo(pi.x, pi.y);
+        }
+        ctx.stroke();
+
+        points.forEach((p, i) => {
+            const sc = toScreen(p.mx, p.my);
+            ctx.fillStyle = i === 0 ? '#16a34a' : (i === points.length - 1 ? '#dc2626' : '#2563eb');
+            ctx.beginPath(); ctx.arc(sc.x, sc.y, 6, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = '#fff';
+            ctx.font = 'bold 10px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(i, sc.x, sc.y + 4);
+        });
+    }
+
+    // 邻居观测轨迹（红色）
+    if (neighborPoints.length >= 2) {
+        ctx.strokeStyle = '#dc2626';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        const n0 = toScreen(neighborPoints[0].mx, neighborPoints[0].my);
+        ctx.moveTo(n0.x, n0.y);
+        for (let i = 1; i < neighborPoints.length; i++) {
+            const ni = toScreen(neighborPoints[i].mx, neighborPoints[i].my);
+            ctx.lineTo(ni.x, ni.y);
+        }
+        ctx.stroke();
+
+        neighborPoints.forEach((p, i) => {
+            const sc = toScreen(p.mx, p.my);
+            ctx.fillStyle = '#dc2626';
+            ctx.beginPath(); ctx.arc(sc.x, sc.y, 6, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = '#fff';
+            ctx.font = 'bold 10px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(i, sc.x, sc.y + 4);
+        });
+    }
+
+    // Ground truth
+    if (groundTruth && points.length > 0) {
+        const lastPt = points[points.length - 1];
+        ctx.strokeStyle = '#059669';
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([6, 3]);
+        ctx.beginPath();
+        const g0 = toScreen(lastPt.mx + groundTruth[0][0], lastPt.my + groundTruth[0][1]);
+        ctx.moveTo(g0.x, g0.y);
+        for (let i = 1; i < groundTruth.length; i++) {
+            const gi = toScreen(lastPt.mx + groundTruth[i][0], lastPt.my + groundTruth[i][1]);
+            ctx.lineTo(gi.x, gi.y);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        const gEnd = toScreen(
+            lastPt.mx + groundTruth[groundTruth.length-1][0],
+            lastPt.my + groundTruth[groundTruth.length-1][1]);
+        ctx.fillStyle = '#059669';
+        ctx.beginPath(); ctx.arc(gEnd.x, gEnd.y, 7, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 9px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('真值', gEnd.x, gEnd.y - 12);
+    }
+
+    // 预测轨迹
+    if (predData && points.length > 0) {
+        predData.probabilities
+            .map((p, i) => ({ prob: p, idx: i }))
+            .sort((a, b) => b.prob - a.prob)
+            .forEach(({ idx }, rank) => {
+                const traj = predData.trajectories[idx];
+                const unc = predData.uncertainties[idx];
+
+                ctx.strokeStyle = COLORS[idx];
+                ctx.lineWidth = 2.5;
+                ctx.setLineDash([8, 3]);
+                ctx.beginPath();
+                const t0 = toScreen(traj[0][0], traj[0][1]);
+                ctx.moveTo(t0.x, t0.y);
+                for (let i = 1; i < traj.length; i++) {
+                    const ti = toScreen(traj[i][0], traj[i][1]);
+                    ctx.lineTo(ti.x, ti.y);
+                }
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                const end = traj[traj.length - 1];
+                const e = toScreen(end[0], end[1]);
+                ctx.fillStyle = COLORS[idx];
+                ctx.beginPath(); ctx.arc(e.x, e.y, 9, 0, Math.PI * 2); ctx.fill();
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 11px sans-serif';
+                ctx.textAlign = 'center';
+                // 终点标注用「模态编号」而非「概率名次」，与颜色/图例/详情表保持一致
+                ctx.fillText('' + (idx + 1), e.x, e.y + 4);
+                // 最优模态（概率最高）额外高亮标记
+                if (rank === 0) {
+                    ctx.strokeStyle = COLORS[idx];
+                    ctx.lineWidth = 3;
+                    ctx.beginPath(); ctx.arc(e.x, e.y, 13, 0, Math.PI * 2); ctx.stroke();
+                    ctx.fillStyle = COLORS[idx];
+                    ctx.font = 'bold 10px sans-serif';
+                    ctx.fillText('最优', e.x, e.y - 14);
+                }
+
+                [5, 15, 28].forEach(t => {
+                    if (t >= traj.length) return;
+                    const c = toScreen(traj[t][0], traj[t][1]);
+                    const sx = Math.min(Math.sqrt(Math.max(unc[t][0], 1e-6)) * SCALE * 2, MAX_ELLIPSE_PX);
+                    const sy = Math.min(Math.sqrt(Math.max(unc[t][1], 1e-6)) * SCALE * 2, MAX_ELLIPSE_PX);
+                    ctx.strokeStyle = COLORS[idx];
+                    ctx.globalAlpha = 0.25;
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.ellipse(c.x, c.y, sx, sy, 0, 0, Math.PI * 2);
+                    ctx.stroke();
+                    ctx.globalAlpha = 1;
+                });
+            });
+    }
+
+    // 邻居预测 + 碰撞预警（两车场景）
+    if (predData && predData.collision && predData.collision.ego_best && predData.collision.neighbor_best) {
+        const egoBest = predData.collision.ego_best;
+        const nbrBest = predData.collision.neighbor_best;
+
+        // 邻居 best mode 预测（红色虚线）
+        ctx.strokeStyle = '#dc2626';
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([8, 3]);
+        ctx.beginPath();
+        const nb0 = toScreen(nbrBest[0][0], nbrBest[0][1]);
+        ctx.moveTo(nb0.x, nb0.y);
+        for (let i = 1; i < nbrBest.length; i++) {
+            const nbi = toScreen(nbrBest[i][0], nbrBest[i][1]);
+            ctx.lineTo(nbi.x, nbi.y);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // 碰撞风险帧：两车距离 < 2m 标红 + 连线
+        predData.collision.risk_frames.forEach(t => {
+            const pe = toScreen(egoBest[t][0], egoBest[t][1]);
+            const pn = toScreen(nbrBest[t][0], nbrBest[t][1]);
+            ctx.strokeStyle = '#ef4444';
+            ctx.fillStyle = '#ef4444';
+            ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.arc(pe.x, pe.y, 7, 0, Math.PI * 2); ctx.stroke();
+            ctx.beginPath(); ctx.arc(pn.x, pn.y, 7, 0, Math.PI * 2); ctx.stroke();
+            ctx.globalAlpha = 0.5;
+            ctx.beginPath(); ctx.moveTo(pe.x, pe.y); ctx.lineTo(pn.x, pn.y); ctx.stroke();
+            ctx.globalAlpha = 1;
+        });
+    }
+
+    // 图例
+    const ly = canvas.height - 20;
+    ctx.font = '12px sans-serif';
+    ctx.fillStyle = '#2563eb';
+    ctx.fillText('-- 观测轨迹', 10, ly);
+    ctx.fillStyle = '#059669';
+    ctx.fillText('-- 真实轨迹', 120, ly);
+    COLORS.forEach((c, i) => {
+        ctx.fillStyle = c;
+        ctx.fillText('-- 模态' + (i+1), 230 + i * 85, ly);
+    });
+}
+
+// ── 自适应缩放：把观测+预测+真值轨迹收进画布 ─────────
+function autoFitView() {
+    var all = [];
+    points.forEach(function(p) { all.push([p.mx, p.my]); });
+    neighborPoints.forEach(function(p) { all.push([p.mx, p.my]); });
+    if (predData && predData.trajectories) {
+        predData.trajectories.forEach(function(traj) {
+            traj.forEach(function(pt) { all.push([pt[0], pt[1]]); });
+        });
+    }
+    if (predData && predData.neighbor_trajectories) {
+        predData.neighbor_trajectories.forEach(function(traj) {
+            traj.forEach(function(pt) { all.push([pt[0], pt[1]]); });
+        });
+    }
+    if (groundTruth && points.length > 0) {
+        var lp = points[points.length - 1];
+        groundTruth.forEach(function(pt) { all.push([lp.mx + pt[0], lp.my + pt[1]]); });
+    }
+    if (all.length < 2) return;
+
+    var minX = all[0][0], maxX = all[0][0], minY = all[0][1], maxY = all[0][1];
+    for (var i = 1; i < all.length; i++) {
+        if (all[i][0] < minX) minX = all[i][0];
+        if (all[i][0] > maxX) maxX = all[i][0];
+        if (all[i][1] < minY) minY = all[i][1];
+        if (all[i][1] > maxY) maxY = all[i][1];
+    }
+
+    var margin = 40;
+    var spanX = (maxX - minX) || 1;
+    var spanY = (maxY - minY) || 1;
+    SCALE = Math.min((canvas.width - 2 * margin) / spanX, (canvas.height - 2 * margin) / spanY);
+    SCALE = Math.max(5, Math.min(500, SCALE));
+
+    var centerX = (minX + maxX) / 2;
+    var centerY = (minY + maxY) / 2;
+    ORIGIN_X = canvas.width / 2 - centerX * SCALE;
+    ORIGIN_Y = canvas.height / 2 + centerY * SCALE;
+}
+
+// 恢复默认视图（清空/加载示例后重新开始）
+function resetView() {
+    ORIGIN_X = 60;
+    ORIGIN_Y = 280;
+    SCALE = 50;
+}
+
+// ── 交互事件（使用 canvasCoords 修正缩放） ────────
+canvas.addEventListener('mousedown', function(e) {
+    // 右键：只平移，不新增点
+    if (e.button === 2 || (e.button === 0 && e.ctrlKey)) {
+        isPanning = true;
+        panStartX = e.clientX;
+        panStartY = e.clientY;
+        e.preventDefault();
+        return;
+    }
+
+    // 左键：选节点或新增点
+    if (e.button !== 0) return;
+
+    const c = canvasCoords(e);
+    const target = drawNeighborMode ? neighborPoints : points;
+
+    for (let i = 0; i < target.length; i++) {
+        const pi = toScreen(target[i].mx, target[i].my);
+        if (Math.hypot(c.sx - pi.x, c.sy - pi.y) < 12) {
+            selectedIdx = i;
+            selectedIsNeighbor = drawNeighborMode;
+            return;
+        }
+    }
+
+    if (target.length < 30) {
+        const m = toMeter(c.sx, c.sy);
+        target.push({ mx: m.x, my: m.y });
+        predData = null;
+        groundTruth = null;
+        hideCards();
+        draw();
+    }
+});
+
+canvas.addEventListener('mouseup', function() { selectedIdx = null; isPanning = false; });
+canvas.addEventListener('mouseleave', function() { selectedIdx = null; isPanning = false; });
+
+// ── 右键拖拽平移 + 缩放 ───────────────────────────
+canvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+
+canvas.addEventListener('mousemove', function(e) {
+    if (isPanning) {
+        var dx = e.clientX - panStartX;
+        var dy = e.clientY - panStartY;
+        ORIGIN_X += dx;
+        ORIGIN_Y += dy;
+        panStartX = e.clientX;
+        panStartY = e.clientY;
+        draw();
+        return;
+    }
+    if (selectedIdx === null) return;
+    const c = canvasCoords(e);
+    const m = toMeter(c.sx, c.sy);
+    const target = selectedIsNeighbor ? neighborPoints : points;
+    target[selectedIdx].mx = m.x;
+    target[selectedIdx].my = m.y;
+    draw();
+});
+
+// ── 滚轮缩放 ──────────────────────────────────────
+canvas.addEventListener('wheel', function(e) {
+    e.preventDefault();
+    var rect = canvas.getBoundingClientRect();
+    var mx = e.clientX - rect.left;
+    var my = e.clientY - rect.top;
+
+    // 以鼠标位置为中心缩放
+    var oldScale = SCALE;
+    var zoom = (e.deltaY < 0) ? 1.15 : 1 / 1.15;
+    SCALE = Math.max(5, Math.min(500, SCALE * zoom));
+
+    // 调整原点使缩放中心保持在鼠标指向的米制位置
+    var meterX = (mx - ORIGIN_X) / oldScale;
+    var meterY = (ORIGIN_Y - my) / oldScale;
+    ORIGIN_X = mx - meterX * SCALE;
+    ORIGIN_Y = my + meterY * SCALE;
+
+    draw();
+});
+
+// ── API 调用 ──────────────────────────────────────
+function apiBase() {
+    // 自动检测：如果 HTML 是通过 Flask 渲染的，用相对路径即可
+    return '';
+}
+
+async function apiFetch(url, options) {
+    let resp;
+    try {
+        resp = await fetch(apiBase() + url, options);
+    } catch (e) {
+        if (e.message === 'Failed to fetch') {
+            throw new Error('无法连接到服务器，请确认已执行 python demo/app.py 启动后端');
+        }
+        throw e;
+    }
+    if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error('服务器错误 (' + resp.status + '): ' + text);
+    }
+    return resp.json();
+}
+
+async function runPrediction() {
+    if (points.length < OBS_MIN) {
+        showToast('观测点不足，请至少添加 ' + OBS_MIN + ' 个点（当前 ' + points.length + ' 个）', 'error');
+        return;
+    }
+
+    const obs = points.slice(0, OBS_MIN).map(p => [p.mx, p.my]);
+    const hasNeighbor = neighborPoints.length >= OBS_MIN;
+
+    try {
+        let result;
+        if (hasNeighbor) {
+            const nbrObs = neighborPoints.slice(0, OBS_MIN).map(p => [p.mx, p.my]);
+            result = await apiFetch('/api/v1/predict_pair', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ trajectory: obs, neighbor: nbrObs }),
+            });
+        } else {
+            result = await apiFetch('/api/v1/predict', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ trajectory: obs }),
+            });
+        }
+        if (!result.success) {
+            showToast('预测失败: ' + result.error, 'error');
+            return;
+        }
+        predData = result.data;
+        groundTruth = null;
+        updateUI(result.data);
+        autoFitView();
+        draw();
+        if (hasNeighbor && result.data.collision) {
+            const c = result.data.collision;
+            showToast(c.warning
+                ? ('⚠️ 碰撞预警：预测最小距离 ' + c.min_distance.toFixed(2) + 'm')
+                : ('两车预测最小距离 ' + c.min_distance.toFixed(2) + 'm（安全）'), c.warning ? 'error' : 'info');
+        } else {
+            showToast('预测完成！最佳模态: ' + result.data.summary.best_mode, 'info');
+        }
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
+// ── 加载示例 ──────────────────────────────────────
+async function loadExample(name) {
+    try {
+        const data = await apiFetch('/api/v1/examples');
+        const ex = data.examples.find(function(e) { return e.name === name; });
+        if (!ex) { showToast('未找到示例: ' + name, 'error'); return; }
+
+        points = ex.trajectory.map(function(xy) { return { mx: xy[0], my: xy[1] }; });
+        neighborPoints = (ex.neighbor || []).map(function(xy) { return { mx: xy[0], my: xy[1] }; });
+        drawNeighborMode = false;
+        syncNeighborModeBtn();
+        predData = null;
+        groundTruth = null;
+        resetView();
+        hideCards();
+        draw();
+        showToast('已加载: ' + ex.description, 'info');
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
+// ── 画邻居车模式切换 ───────────────────────────────
+function toggleNeighborMode() {
+    drawNeighborMode = !drawNeighborMode;
+    syncNeighborModeBtn();
+}
+
+function syncNeighborModeBtn() {
+    var btn = document.getElementById('nbrModeBtn');
+    var hint = document.getElementById('nbrHint');
+    if (drawNeighborMode) {
+        btn.style.background = '#fee2e2';
+        btn.style.color = '#991b1b';
+        btn.style.borderColor = '#dc2626';
+        hint.style.display = '';
+    } else {
+        btn.style.background = '';
+        btn.style.color = '';
+        btn.style.borderColor = '';
+        hint.style.display = 'none';
+    }
+}
+
+// ── CSV 上传 ──────────────────────────────────────
+async function handleCSV(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+        const result = await apiFetch('/api/v1/predict_csv', {
+            method: 'POST',
+            body: formData,
+        });
+        if (!result.success) {
+            showToast('CSV 预测失败: ' + result.error, 'error');
+            return;
+        }
+
+        const data = result.data;
+
+        // CSV 使用绝对世界坐标（如 Argoverse，数值可达数千米）
+        // 画布 SCALE=40px/m 只能显示 ±10m 范围，必须相对于首点居中
+        if (data.observation && data.observation.length >= OBS_MIN) {
+            var offsetX = data.observation[0][0];
+            var offsetY = data.observation[0][1];
+            var lastObsX = data.observation[data.observation.length - 1][0];
+            var lastObsY = data.observation[data.observation.length - 1][1];
+
+            // 观测轨迹：相对于首点居中
+            points = data.observation.map(function(xy) {
+                return { mx: xy[0] - offsetX, my: xy[1] - offsetY };
+            });
+
+            // 预测轨迹：后端返回绝对坐标（相对位移 + 末帧），同步偏移
+            if (data.trajectories) {
+                data.trajectories = data.trajectories.map(function(traj) {
+                    return traj.map(function(xy) {
+                        return [xy[0] - offsetX, xy[1] - offsetY];
+                    });
+                });
+            }
+
+            // Ground truth: draw() 期望相对于末观测点的位移，后端返回绝对坐标
+            if (data.ground_truth) {
+                data.ground_truth = data.ground_truth.map(function(xy) {
+                    return [xy[0] - lastObsX, xy[1] - lastObsY];
+                });
+            }
+        } else if (data.last_point) {
+            // fallback：只用最后一个观测点
+            points = [{ mx: 0, my: 0 }];
+        }
+
+        predData = data;
+        groundTruth = data.ground_truth || null;
+        updateUI(data);
+        autoFitView();
+        draw();
+        showToast('CSV 解析完成，已预测 ' + (data.ground_truth ? '(含真值对比)' : ''), 'info');
+
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+
+    event.target.value = '';
+}
+
+// ── 更新 UI ──────────────────────────────────────
+function updateUI(data) {
+    document.getElementById('summaryCard').style.display = '';
+    // 碰撞预警状态（两车场景）
+    const collisionBox = document.getElementById('collisionBox');
+    if (data.collision) {
+        collisionBox.style.display = '';
+        if (data.collision.warning) {
+            collisionBox.style.background = '#fee2e2';
+            collisionBox.style.color = '#991b1b';
+            collisionBox.textContent = '⚠️ 碰撞预警：预测两车最小距离 ' + data.collision.min_distance.toFixed(2) + 'm（阈值 2m）';
+        } else {
+            collisionBox.style.background = '#d1fae5';
+            collisionBox.style.color = '#065f46';
+            collisionBox.textContent = '✓ 安全：预测两车最小距离 ' + data.collision.min_distance.toFixed(2) + 'm';
+        }
+    } else {
+        collisionBox.style.display = 'none';
+    }
+    document.getElementById('bestModeLabel').textContent = '模态 ' + data.summary.best_mode;
+    var confPct = (data.summary.confidence * 100).toFixed(1);
+    document.getElementById('confPct').textContent = confPct + '%';
+
+    var confBadge = document.getElementById('confBadge');
+    var c = data.summary.confidence;
+    if (c >= 0.7) {
+        confBadge.innerHTML = '<span class="badge badge-high">高置信度</span>';
+    } else if (c >= 0.4) {
+        confBadge.innerHTML = '<span class="badge badge-mid">中等置信度</span>';
+    } else {
+        confBadge.innerHTML = '<span class="badge badge-low">低置信度</span>';
+    }
+
+    document.getElementById('obsPts').textContent = data.summary.observation_points;
+    document.getElementById('predHorizon').textContent = data.summary.prediction_horizon + ' 帧 (3s)';
+    document.getElementById('avgUnc').textContent = data.summary.avg_uncertainty.toFixed(4);
+
+    // 获取模型信息（缓存友好）
+    apiFetch('/api/v1/model_info').then(function(d) {
+        if (d.success) {
+            var p = d.model.parameters;
+            document.getElementById('nParams').textContent = (p / 1000).toFixed(0) + 'K';
+            document.getElementById('chipParams').textContent = (p / 1000).toFixed(0) + 'K 参数';
+            document.getElementById('chipDevice').textContent = d.model.device === 'cuda' ? 'GPU' : 'CPU';
+        }
+    }).catch(function() {});
+
+    // 模态概率条
+    document.getElementById('probCard').style.display = '';
+    var bars = document.getElementById('probBars');
+    bars.innerHTML = data.probabilities.map(function(p, i) {
+        var pct = (p * 100).toFixed(1);
+        return '<div class="mode-bar">' +
+            '<div class="mode-dot" style="background:' + COLORS[i] + ';"></div>' +
+            '<span style="width:50px;font-size:13px;font-weight:600;">模态' + (i+1) + '</span>' +
+            '<div class="mode-track">' +
+            '<div class="mode-fill" style="width:' + pct + '%;background:' + COLORS[i] + ';">' + pct + '%</div>' +
+            '</div></div>';
+    }).join('');
+
+    // 轨迹详情表
+    document.getElementById('detailCard').style.display = '';
+    var tbody = document.getElementById('detailBody');
+    var bestMode = data.summary.best_mode;
+    tbody.innerHTML = data.statistics.map(function(s) {
+        var isBest = s.mode === bestMode;
+        return '<tr class="' + (isBest ? 'best-row' : '') + '">' +
+            '<td>' +
+            '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + COLORS[s.mode-1] + ';margin-right:6px;"></span>' +
+            '<strong>模态 ' + s.mode + '</strong>' +
+            (isBest ? ' [最优]' : '') +
+            '</td>' +
+            '<td><strong>' + (s.probability * 100).toFixed(1) + '%</strong></td>' +
+            '<td>(' + s.final_x.toFixed(2) + ', ' + s.final_y.toFixed(2) + ')</td>' +
+            '<td>' + s.total_distance.toFixed(2) + ' m</td>' +
+            '<td>' + s.avg_uncertainty.toFixed(4) + '</td>' +
+            '</tr>';
+    }).join('');
+}
+
+function hideCards() {
+    document.getElementById('summaryCard').style.display = 'none';
+    document.getElementById('detailCard').style.display = 'none';
+    document.getElementById('probCard').style.display = 'none';
+}
+
+function clearAll() {
+    points = [];
+    neighborPoints = [];
+    drawNeighborMode = false;
+    syncNeighborModeBtn();
+    selectedIdx = null;
+    selectedIsNeighbor = false;
+    predData = null;
+    groundTruth = null;
+    resetView();
+    hideCards();
+    draw();
+}
+
+// ── 初始化 ────────────────────────────────────────
+async function init() {
+    try {
+        var data = await apiFetch('/api/v1/model_info');
+        if (data.success) {
+            var p = data.model.parameters;
+            var k = data.model.k_modes;
+            document.getElementById('chipParams').textContent = (p / 1000).toFixed(0) + 'K 参数';
+            document.getElementById('chipDevice').textContent = data.model.device === 'cuda' ? 'GPU' : 'CPU';
+            document.getElementById('nParams').textContent = (p / 1000).toFixed(0) + 'K';
+            // 动态适配 K 值：颜色和 chip 文本由后端决定，彻底消除硬编码不一致
+            COLORS = COLOR_PALETTE.slice(0, k);
+            NUM_MODES = k;
+            // 更新顶部所有 chip 中的模态数
+            var chips = document.querySelectorAll('.chip');
+            for (var i = 0; i < chips.length; i++) {
+                if (chips[i].textContent.indexOf('模态') !== -1) {
+                    chips[i].textContent = 'K=' + k + ' 模态';
+                }
+            }
+        }
+        await loadExample('straight');
+    } catch (e) {
+        showToast('初始化失败: ' + e.message + ' — 请确认后端已启动', 'error');
+    }
+}
+
+init();
+draw();
+</script>
+
+</body>
+</html>

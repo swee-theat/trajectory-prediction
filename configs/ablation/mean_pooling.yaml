@@ -1,0 +1,3 @@
+# 消融实验：注意力池化 → 均值池化
+model:
+  pooling: "mean"

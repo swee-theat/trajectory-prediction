@@ -1,0 +1,3 @@
+# 消融实验：2 模态 K=2
+model:
+  num_modes: 2

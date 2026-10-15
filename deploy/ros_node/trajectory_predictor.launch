@@ -1,0 +1,27 @@
+<!-- 轨迹预测节点启动文件 -->
+<launch>
+  <!-- RViz 可视化开关（默认关闭；引用的 rviz 配置文件未随包分发） -->
+  <arg name="show_rviz" default="false"/>
+
+  <!-- 轨迹预测 -->
+  <node
+    name="trajectory_predictor"
+    pkg="ai_node_master"
+    type="trajectory_predictor.py"
+    output="screen"
+    respawn="true">
+    <param name="model_path" value="$(find ai_node_master)/models/trajectory_model.onnx"/>
+    <param name="obs_len" value="20"/>
+    <param name="pred_len" value="30"/>
+    <param name="num_modes" value="5"/>
+  </node>
+
+  <!-- RViz 可视化（可选） -->
+  <node
+    name="rviz"
+    pkg="rviz"
+    type="rviz"
+    args="-d $(find ai_node_master)/rviz/trajectory_predict.rviz"
+    if="$(arg show_rviz)"
+  />
+</launch>
