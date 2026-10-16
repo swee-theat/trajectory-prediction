@@ -5,11 +5,17 @@
 ```
 deploy/
 ├── README.md                          # 本文档
-├── trajectory_model.onnx              # ONNX 模型（0.85 MB，纯轨迹基线 s2_仅轨迹基线）
+├── trajectory_model.onnx              # FP32 ONNX 模型（0.85 MB，纯轨迹基线 s2_仅轨迹基线）
+├── trajectory_model_int8.onnx         # INT8 量化模型（0.30 MB，阶段四产物，推荐部署用）
 ├── export_onnx.py                     # PyTorch → ONNX 导出脚本（Windows 端用）
+├── quantize_int8.py                   # ONNX INT8 量化脚本（onnxsim 精简 + 动态量化）
 ├── ros_node/
 │   ├── trajectory_predictor.py        # ROS 轨迹预测节点
-│   └── trajectory_predictor.launch    # ROS launch 文件
+│   ├── trajectory_predictor.launch    # 轨迹预测 launch 文件
+│   ├── obstacle_avoidance.py          # ROS 避障节点（感知→预测→决策→执行闭环）
+│   └── obstacle_avoidance.launch      # 避障 launch 文件
+├── test/
+│   └── test_obstacle_avoidance.py     # 避障核心逻辑离线单元测试
 └── requirements_nuc.txt               # NUC 端 Python 依赖
 ```
 
@@ -46,7 +52,67 @@ python deploy/export_onnx.py
 # 输出: deploy/trajectory_model.onnx (0.85 MB)
 ```
 
-## 三、运行
+## 三、INT8 量化（阶段四）
+
+> **平台口径**：需求文档原定 Jetson Nano + TensorRT 做 INT8，经确认改为实体小车实际
+> 平台 Intel NUC + onnxruntime（NUC 无 NVIDIA GPU，TensorRT 不可用）。量化方案为
+> **onnxsim 图简化 + 动态量化**（权重 INT8、激活运行时动态量化），经对比静态量化
+> （体积更大、精度 +17% 超标）后选定。
+
+```bash
+python deploy/quantize_int8.py
+# 输出: deploy/trajectory_model_int8.onnx (0.30 MB)
+```
+
+量化结果：
+
+| 指标 | FP32 | INT8 | 验收 |
+|------|------|------|------|
+| 权重体积 | 832.5 KB | 205 KB | 压缩 75.4% ✅（≥75%） |
+| onnx 文件体积 | 0.85 MB | 0.30 MB | 压缩 65.3% |
+| 验证集 minADE | 0.833 m | 0.873 m | 增幅 +4.85% ✅（≤10%） |
+| CPU 推理延迟 | 0.36 ms | 0.71 ms | ✅（<50ms） |
+
+> **体积口径说明**：权重体积已精确压缩 75.4%（INT8 量化本质）；整个 .onnx 文件只到
+> 65.3%，是因为 ONNX 是明文 protobuf，0.85MB 小模型的图结构开销（节点定义、tensor
+> 名）占比高。这是 ONNX 格式的客观限制，非量化实现问题——只有 TensorRT 二进制引擎
+> 才能让整文件到 75%。
+
+ROS 节点默认加载 INT8 模型（`trajectory_model_int8.onnx`），高精度场景可在 launch
+文件里把 `model_path` 改回 `trajectory_model.onnx`。
+
+## 四、避障（硬件演示：感知→预测→决策→执行闭环）
+
+配合深度摄像头 + 轨迹预测节点，实现需求文档预期成果④的避障闭环：
+
+```
+感知 ──> 预测 ──> 决策 ──> 执行
+Orbbec深度图   轨迹预测   碰撞检测   减速绕行 → /cmd_vel
+```
+
+- **订阅**：`/camera/depth_registered/image_raw`（深度图 mm）、
+  `/camera/depth/camera_info`（相机内参）、`/predicted_best_path`（最高概率模态）、
+  `/odom`（里程计，累加里程用于自停兜底）、`/avoidance_reset`（里程归零）
+- **发布**：`/cmd_vel`（麦克纳姆轮 vx/vy/ω）
+- **决策链**：深度图反投影 3D → tf 转 base_footprint → 地面分割(z>8cm) → 障碍物占据栅格；
+  碰撞检测 = 预测轨迹 best 模态(膨胀 15cm) + 直行走廊(覆盖 slow_start=1.5m 盲区) 取更近威胁；
+  决策状态机(FORWARD/AVOIDING/STOPPED + 滞回 + N 帧防抖 + 左右占据选向) → 减速绕行
+
+```bash
+# 先启动深度摄像头 + 轨迹预测节点，再启动避障节点:
+roslaunch ai_node_master obstacle_avoidance.launch
+```
+
+核心逻辑（深度反投影 / 栅格化 / 碰撞检测 / 决策）为不依赖 ROS 的纯函数，可离线单测：
+
+```bash
+python deploy/test/test_obstacle_avoidance.py   # 15 项全绿
+```
+
+> **低速场景口径**（手册 14.3 节）：车速度 vx≤0.12m/s，障碍物（锥桶/围挡静态 + 低速
+> 动态）与车同量级，深度图 30Hz 实时检测即可跟上，无需障碍物轨迹预测。
+
+## 五、运行
 
 ```bash
 # 方式1: 直接运行节点
@@ -63,7 +129,7 @@ roslaunch ai_node_master navigation.launch &
 roslaunch ai_node_master trajectory_predictor.launch
 ```
 
-## 四、RViz 可视化
+## 六、RViz 可视化
 
 在 RViz 中添加:
 - Add → By topic → `/predicted_trajectories/Marker`
@@ -73,14 +139,17 @@ roslaunch ai_node_master trajectory_predictor.launch
 - 5 条彩色虚线: 5 模态预测轨迹（未来 3 秒）
 - 颜色从红到橙，按概率排序
 
-## 五、ROS 话题接口
+## 七、ROS 话题接口
 
 | 话题 | 类型 | 方向 | 频率 | 说明 |
 |------|------|------|------|------|
 | `/odom` | nav_msgs/Odometry | 订阅 | 20Hz | 里程计输入 |
 | `/predicted_trajectories` | visualization_msgs/MarkerArray | 发布 | 10Hz | 预测路径可视化 |
+| `/predicted_best_path` | nav_msgs/Path | 发布 | 10Hz | 最高概率模态（供避障节点） |
+| `/camera/depth_registered/image_raw` | sensor_msgs/Image | 订阅 | 30Hz | 深度图（避障感知） |
+| `/cmd_vel` | geometry_msgs/Twist | 发布 | 10Hz | 减速绕行指令（避障节点） |
 
-## 六、与规划器集成
+## 八、与规划器集成
 
 预测轨迹可用于改进 DWA 局部规划:
 
@@ -94,12 +163,12 @@ def predicted_path_callback(msg):
     goal = (best_traj.points[-1].x, best_traj.points[-1].y)
 ```
 
-## 七、性能指标
+## 九、性能指标
 
 | 指标 | 值 | 备注 |
 |------|-----|------|
-| 模型大小 | 0.85 MB | 可存储在 NUC 上 |
-| 推理延迟 | 0.49 ms | CPU 单次推理 |
+| 模型大小（FP32 / INT8） | 0.85 / 0.30 MB | INT8 权重压缩 75.4% |
+| 推理延迟（FP32 / INT8） | 0.36 / 0.71 ms | CPU 单次推理，均 <50ms |
 | 等效频率 | ~2057 Hz | 远超 20Hz 需求 |
 | 输入维度 | [1, 20, 11] | 20 帧历史 × 11 维特征 |
 | 输出维度 | [5, 30, 2] | K=5 模态 × 30 帧预测 |

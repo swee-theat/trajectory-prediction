@@ -34,6 +34,7 @@ MLP+注意力池化     +城市域感知          交叉注意力交互编码
 | 交互后碰撞误报率 | 8.9% |
 | 参数量（基线 / 三阶段） | 213K / 282K |
 | ONNX 大小 / CPU 推理延迟 | 0.85MB / 0.49ms |
+| INT8 量化（阶段四） | 权重压缩 75.4%、文件 0.30MB、minADE 增幅 +4.85%、延迟 0.71ms |
 
 ## 目录结构
 
@@ -100,10 +101,11 @@ python demo/app.py
 ### 7. 实体小车部署（ONNX + ROS）
 
 ```bash
-python deploy/export_onnx.py   # 导出 deploy/trajectory_model.onnx
+python deploy/export_onnx.py     # 导出 deploy/trajectory_model.onnx (FP32)
+python deploy/quantize_int8.py   # INT8 量化 → deploy/trajectory_model_int8.onnx (0.30MB)
 ```
 
-ROS 节点与 Intel NUC 部署步骤见 [deploy/README.md](deploy/README.md)。
+ROS 节点默认加载 INT8 模型，Intel NUC 部署步骤见 [deploy/README.md](deploy/README.md)。
 
 ## 环境
 

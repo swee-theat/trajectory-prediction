@@ -10,7 +10,8 @@
     type="trajectory_predictor.py"
     output="screen"
     respawn="true">
-    <param name="model_path" value="$(find ai_node_master)/models/trajectory_model.onnx"/>
+    <!-- 默认 INT8 量化模型（阶段四产物，体积 303KB）；高精度场景改回 trajectory_model.onnx -->
+    <param name="model_path" value="$(find ai_node_master)/models/trajectory_model_int8.onnx"/>
     <param name="obs_len" value="20"/>
     <param name="pred_len" value="30"/>
     <param name="num_modes" value="5"/>

@@ -1,0 +1,56 @@
+<!-- 避障节点启动文件：深度图感知 + 预测轨迹 → 碰撞检测 → 减速绕行 → cmd_vel -->
+
+<!--
+  依赖（需先启动）：
+    1. Orbbec 深度摄像头驱动（astra_camera，发布 /camera/depth_registered/image_raw
+       与 /camera/depth/camera_info）
+    2. 轨迹预测节点（trajectory_predictor，发布 /predicted_best_path）
+    3. TF 树（map→odom→base_footprint→camera，供坐标变换）
+
+  参数均为低速场景默认值（手册 14.3 节：vx≤0.12m/s），实车调试时按需调整。
+-->
+
+<launch>
+  <node
+    name="obstacle_avoidance"
+    pkg="ai_node_master"
+    type="obstacle_avoidance.py"
+    output="screen"
+    respawn="true">
+
+    <!-- 话题 -->
+    <param name="depth_topic" value="/camera/depth_registered/image_raw"/>
+    <param name="camera_info_topic" value="/camera/depth/camera_info"/>
+    <param name="best_path_topic" value="/predicted_best_path"/>
+    <param name="odom_topic" value="/odom"/>
+    <param name="reset_topic" value="/avoidance_reset"/>
+    <param name="cmd_vel_topic" value="/cmd_vel"/>
+    <param name="base_frame" value="base_footprint"/>
+
+    <!-- 深度处理 -->
+    <param name="depth_step" value="4"/>        <!-- 像素下采样步长 -->
+    <param name="depth_max_range" value="5.0"/> <!-- 有效深度上限(米) -->
+    <param name="ground_thresh" value="0.08"/>  <!-- 地面分割高度阈值(米) -->
+
+    <!-- 障碍物栅格（base_footprint 系） -->
+    <param name="grid_res" value="0.05"/>       <!-- 栅格分辨率(米) -->
+    <param name="x_min" value="0.15"/>          <!-- 前方检测起点=车头位置(米)，排除车头自身深度点 -->
+    <param name="x_max" value="3.0"/>           <!-- 前方检测终点(米) -->
+    <param name="y_min" value="-1.5"/>          <!-- 横向左界(米) -->
+    <param name="y_max" value="1.5"/>           <!-- 横向右界(米) -->
+
+    <!-- 避障决策 -->
+    <param name="margin" value="0.15"/>         <!-- 横向安全余量=车半宽(约0.10m)+余量(0.05m)，同时作轨迹膨胀半径与走廊半宽 -->
+    <param name="max_vx" value="0.11"/>         <!-- 直行速度上限(米/秒) -->
+    <param name="slow_start" value="1.5"/>      <!-- 开始减速的碰撞距离(米) -->
+    <param name="safe_stop" value="0.4"/>       <!-- 完全停车的碰撞距离(米) -->
+    <param name="lat_vy" value="0.05"/>         <!-- 绕行横向速度(米/秒) -->
+    <param name="hyst" value="0.2"/>            <!-- 退出避障/停车滞回(米) -->
+    <param name="side_thresh" value="0.05"/>    <!-- 正对障碍物中心的判定阈值(米) -->
+    <param name="clear_frames" value="5"/>      <!-- 连续清空多少帧才退出避障/停车(防抖) -->
+    <param name="decide_hz" value="10.0"/>      <!-- 决策频率(Hz) -->
+
+    <!-- 里程自停（M3 演示安全兜底） -->
+    <param name="max_distance" value="5.0"/>    <!-- 累计行驶里程超过即锁死停车(米)，reset 话题归零 -->
+  </node>
+</launch>

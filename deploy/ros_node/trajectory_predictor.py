@@ -28,9 +28,9 @@ import rospy
 import numpy as np
 import onnxruntime as ort
 from collections import deque
-from nav_msgs.msg import Odometry
+from nav_msgs.msg import Odometry, Path
 from visualization_msgs.msg import Marker, MarkerArray
-from geometry_msgs.msg import Point
+from geometry_msgs.msg import Point, PoseStamped
 from std_msgs.msg import ColorRGBA, Header
 
 # ── 配置（与训练参数保持一致）────────────────────────
@@ -39,7 +39,7 @@ PRED_LEN = 30         # 预测帧数 (3s @ 10Hz)
 INPUT_DIM = 11        # 特征维度
 NUM_MODES = 5         # K 模态数
 TARGET_FREQ = 10.0    # 采样+预测频率 (Hz)。训练数据是 10Hz (dt=0.1s)，odom 20Hz 必须降采样
-MODEL_PATH = "deploy/trajectory_model.onnx"  # ONNX 模型默认路径（可被 launch 的 model_path 参数覆盖）
+MODEL_PATH = "deploy/trajectory_model_int8.onnx"  # 默认 INT8 量化模型（阶段四产物，体积 303KB）；高精度场景可切回 trajectory_model.onnx
 
 # 模态颜色 (RGBA)
 MODE_COLORS = [
@@ -75,8 +75,13 @@ class TrajectoryPredictor:
             "/predicted_trajectories", MarkerArray, queue_size=2
         )
 
+        # 发布最高概率模态轨迹（供避障节点做碰撞检测，接口比 MarkerArray 明确）
+        self.best_path_pub = rospy.Publisher(
+            "/predicted_best_path", Path, queue_size=2
+        )
+
         rospy.loginfo("轨迹预测节点已启动")
-        rospy.loginfo(f"  ONNX 模型: {MODEL_PATH}")
+        rospy.loginfo(f"  ONNX 模型: {self.model_path}")
         rospy.loginfo(f"  K={NUM_MODES}, obs_len={OBS_LEN}, pred_len={PRED_LEN}")
 
     # ── 里程计回调 ──────────────────────────────────
@@ -177,8 +182,28 @@ class TrajectoryPredictor:
         last_y = self.history[-1][1]
         trajectories_abs = trajectories + np.array([last_x, last_y])
 
+        # 发布最高概率模态轨迹（odom 系），供避障节点做碰撞检测
+        self._publish_best_path(trajectories_abs, mode_probs)
+
         # 发布 MarkerArray 到 RViz
         self._publish_markers(trajectories_abs, mode_probs, last_x, last_y)
+
+    def _publish_best_path(self, trajectories, mode_probs):
+        """发布最高概率模态轨迹为 nav_msgs/Path（odom 系）。
+
+        避障节点订阅此话题做碰撞检测，接口比 MarkerArray 明确（无需解析概率标签）。
+        """
+        best_idx = int(np.argmax(mode_probs))
+        path = Path()
+        path.header = Header(stamp=rospy.Time.now(), frame_id="odom")
+        for p in trajectories[best_idx]:
+            pose = PoseStamped()
+            pose.header = path.header
+            pose.pose.position.x = float(p[0])
+            pose.pose.position.y = float(p[1])
+            pose.pose.orientation.w = 1.0
+            path.poses.append(pose)
+        self.best_path_pub.publish(path)
 
     def _publish_markers(self, trajectories, mode_probs, origin_x, origin_y):
         """创建 RViz MarkerArray 可视化。"""

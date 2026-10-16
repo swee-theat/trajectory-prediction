@@ -27,3 +27,8 @@ requests>=2.28.0
 # 开发工具
 ipython>=8.0.0
 pytest>=7.0.0
+
+# 模型导出与 INT8 量化（deploy/export_onnx.py、deploy/quantize_int8.py）
+onnx>=1.16.0
+onnxruntime>=1.15.0
+onnxsim>=0.4.36
