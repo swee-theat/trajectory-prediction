@@ -507,38 +507,17 @@ function draw() {
             });
     }
 
-    // 邻居预测 + 碰撞预警（两车场景）
-    if (predData && predData.collision && predData.collision.ego_best && predData.collision.neighbor_best) {
+    // 碰撞预警（两车场景）：在 ego 最佳模态预测线上标出危险时刻（红点）
+    if (predData && predData.collision && predData.collision.ego_best) {
         const egoBest = predData.collision.ego_best;
-        const nbrBest = predData.collision.neighbor_best;
 
-        // 邻居 best mode 预测（红色虚线）
-        ctx.strokeStyle = '#dc2626';
-        ctx.lineWidth = 2.5;
-        ctx.setLineDash([8, 3]);
-        ctx.beginPath();
-        const nb0 = toScreen(nbrBest[0][0], nbrBest[0][1]);
-        ctx.moveTo(nb0.x, nb0.y);
-        for (let i = 1; i < nbrBest.length; i++) {
-            const nbi = toScreen(nbrBest[i][0], nbrBest[i][1]);
-            ctx.lineTo(nbi.x, nbi.y);
-        }
-        ctx.stroke();
-        ctx.setLineDash([]);
-
-        // 碰撞风险帧：两车距离 < 2m 标红 + 连线
-        predData.collision.risk_frames.forEach(t => {
-            const pe = toScreen(egoBest[t][0], egoBest[t][1]);
-            const pn = toScreen(nbrBest[t][0], nbrBest[t][1]);
-            ctx.strokeStyle = '#ef4444';
+        if (predData.collision.risk_frames && predData.collision.risk_frames.length) {
             ctx.fillStyle = '#ef4444';
-            ctx.lineWidth = 2;
-            ctx.beginPath(); ctx.arc(pe.x, pe.y, 7, 0, Math.PI * 2); ctx.stroke();
-            ctx.beginPath(); ctx.arc(pn.x, pn.y, 7, 0, Math.PI * 2); ctx.stroke();
-            ctx.globalAlpha = 0.5;
-            ctx.beginPath(); ctx.moveTo(pe.x, pe.y); ctx.lineTo(pn.x, pn.y); ctx.stroke();
-            ctx.globalAlpha = 1;
-        });
+            predData.collision.risk_frames.forEach(t => {
+                const pe = toScreen(egoBest[t][0], egoBest[t][1]);
+                ctx.beginPath(); ctx.arc(pe.x, pe.y, 5, 0, Math.PI * 2); ctx.fill();
+            });
+        }
     }
 
     // 图例

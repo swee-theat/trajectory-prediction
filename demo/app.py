@@ -469,9 +469,10 @@ def examples():
         },
         {
             "name": "lane_change",
-            "description": "S 形换道 (~2 m/s)",
+            "description": "换道 (~6 m/s, 横移一个车道后回正)",
             "trajectory": [
-                [float(i * 0.2), 0.0 if i < 10 else float((i - 10) * 0.08)]
+                [float(i * 0.6),
+                 0.0 if i < 5 else (3.5 if i >= 15 else 3.5 * (i - 5) / 10.0)]
                 for i in range(OBS_LEN)
             ],
         },
