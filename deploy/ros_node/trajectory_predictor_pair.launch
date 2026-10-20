@@ -1,0 +1,49 @@
+<!-- 两车交互轨迹预测节点启动文件 -->
+<launch>
+  <!-- RViz 可视化开关（默认关闭；引用的 rviz 配置文件未随包分发） -->
+  <arg name="show_rviz" default="false"/>
+
+  <!-- 两车交互轨迹预测（订阅主车 /odom + 第二车 /car2/odom） -->
+  <node
+    name="trajectory_predictor_pair"
+    pkg="ai_node_master"
+    type="trajectory_predictor_pair.py"
+    output="screen"
+    respawn="false">
+
+    <!-- 交互 ONNX 模型（deploy/export_onnx_interaction.py 产物） -->
+    <param name="model_path" value="$(find ai_node_master)/models/trajectory_model_interaction.onnx"/>
+
+    <!-- 第二车 odom 话题（ROS 多机：主车跑 roscore，car2 节点 ROS_MASTER_URI 指向主车） -->
+    <param name="neighbor_odom_topic" value="/car2/odom"/>
+
+    <!-- 城市 ID：固定 MIA(2)，与 demo/app.py 一致。city embedding 是 additive bias，
+         传错会给所有预测加固定偏移，勿随意改。 -->
+    <param name="city_id" value="2"/>
+
+    <!-- 碰撞阈值（米）：实车 0.11m/s 口径，0.6m 约 5.5s 反应余量。
+         不能用 demo 的 2m——实车两车相距 2m 内是常态，2m 会恒红预警。 -->
+    <param name="collision_margin" value="0.6"/>
+
+    <!-- 邻居失效回退阈值（秒）：超过 0.5s 未收到 /car2/odom → mask [[0,0]] 退单车 + 标注离线 -->
+    <param name="neighbor_timeout" value="0.5"/>
+
+    <!-- 邻居坐标系偏移 [dx, dy, dyaw]：第二车 odom 原点在主车 odom 系下的位姿。
+         演示流程：先摆位 → 再上电（两车 odom 各自清零）→ 再标 offset，否则每次重启重标。 -->
+    <rosparam param="neighbor_offset">[0.0, 0.0, 0.0]</rosparam>
+
+    <!-- 训练定死参数，不要动（改了和模型不匹配会预测退化） -->
+    <param name="obs_len" value="20"/>
+    <param name="pred_len" value="30"/>
+    <param name="num_modes" value="5"/>
+  </node>
+
+  <!-- RViz 可视化（可选） -->
+  <node
+    name="rviz"
+    pkg="rviz"
+    type="rviz"
+    args="-d $(find ai_node_master)/rviz/trajectory_predict_pair.rviz"
+    if="$(arg show_rviz)"
+  />
+</launch>
