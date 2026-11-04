@@ -41,3 +41,6 @@ project-overview/
 *.doc
 *.docx
 实体小车完整参数手册.md
+
+# 分发包/压缩包（构建产物，不进 git）
+*.zip

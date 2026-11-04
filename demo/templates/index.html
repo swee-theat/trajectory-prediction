@@ -227,6 +227,7 @@
                 <button class="btn-outline" onclick="loadExample('lane_change')">换道示例</button>
                 <button class="btn-outline" onclick="loadExample('head_on')">会车示例</button>
                 <button class="btn-outline" onclick="loadExample('follow')">跟车示例</button>
+                <button class="btn-outline" onclick="loadAvoidExample()">避障示例</button>
                 <button class="btn-outline" onclick="document.getElementById('csvInput').click()">上传CSV</button>
                 <input type="file" id="csvInput" accept=".csv" onchange="handleCSV(event)">
                 <button class="btn-danger btn-sm" onclick="clearAll()">清空</button>
@@ -273,6 +274,7 @@
                 </div>
             </div>
             <div id="collisionBox" style="display:none;margin-top:12px;padding:10px 12px;border-radius:8px;font-weight:600;"></div>
+            <div id="avoidBox" style="display:none;margin-top:8px;padding:10px 12px;border-radius:8px;background:#f9fafb;font-size:13px;line-height:1.7;color:var(--text);"></div>
         </div>
 
         <div class="card" id="detailCard" style="display:none;">
@@ -312,6 +314,8 @@ let selectedIdx = null;
 let selectedIsNeighbor = false; // 当前拖拽选中的节点是否属于邻居
 let predData = null;
 let groundTruth = null;
+let avoidData = null;   // 避障演示结果（障碍物 + 状态机绕行路径）
+let draggingObstacle = false;  // 是否正在拖拽障碍物方块
 
 // 预定义足够多的颜色（随模型模态数动态截取，不硬编码 K）
 const COLOR_PALETTE = ['#ef4444', '#14b8a6', '#8b5cf6', '#f59e0b', '#ec4899',
@@ -520,9 +524,55 @@ function draw() {
         }
     }
 
-    // 图例
+    // 避障演示：障碍物方块 + 状态机绕行模拟路径（非模型输出）
+    if (avoidData && avoidData.obstacle && avoidData.avoidance && points.length > 0) {
+        const lastPt = points[points.length - 1];
+        const ob = avoidData.obstacle;
+        const ocx = lastPt.mx + ob.x;
+        const ocy = lastPt.my + ob.y;
+        const halfPx = ob.size / 2 * SCALE;
+        const o = toScreen(ocx, ocy);
+        // 障碍物方块（橙色）
+        ctx.fillStyle = 'rgba(245, 158, 11, 0.35)';
+        ctx.strokeStyle = '#f59e0b';
+        ctx.lineWidth = 2;
+        ctx.fillRect(o.x - halfPx, o.y - halfPx, halfPx * 2, halfPx * 2);
+        ctx.strokeRect(o.x - halfPx, o.y - halfPx, halfPx * 2, halfPx * 2);
+        ctx.fillStyle = '#92400e';
+        ctx.font = 'bold 11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = '#ffffff';
+        ctx.strokeText('障碍物', o.x, o.y - halfPx - 6);   // 白描边底衬，避免被轨迹线穿过看不清
+        ctx.fillText('障碍物', o.x, o.y - halfPx - 6);
+
+        // 绕行模拟路径（状态机逐帧决策，非模型输出）
+        // 仅画虚线，不画终点圆点/文字：绕行横移仅 ~0.12m，终点与预测终点图标几乎重合
+        const path = avoidData.avoidance.path;
+        if (path && path.length >= 2 && !draggingObstacle) {
+            ctx.strokeStyle = '#f97316';
+            ctx.lineWidth = 2.5;
+            ctx.setLineDash([5, 4]);
+            ctx.beginPath();
+            const p0 = toScreen(path[0][0], path[0][1]);
+            ctx.moveTo(p0.x, p0.y);
+            for (let i = 1; i < path.length; i++) {
+                const pi = toScreen(path[i][0], path[i][1]);
+                ctx.lineTo(pi.x, pi.y);
+            }
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+    }
+
+    // 图例（先铺半透明白底，避免轨迹/绕行路径线穿过图例文字造成遮挡）
     const ly = canvas.height - 20;
+    const legendTop = avoidData ? (ly - 48) : (ly - 16);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.88)';
+    ctx.fillRect(0, legendTop, canvas.width, canvas.height - legendTop);
+
     ctx.font = '12px sans-serif';
+    ctx.textAlign = 'left';   // 重置对齐：上面轨迹编号设了 center，否则图例会左移半个字宽被裁剪
     ctx.fillStyle = '#2563eb';
     ctx.fillText('-- 观测轨迹', 10, ly);
     ctx.fillStyle = '#059669';
@@ -531,6 +581,25 @@ function draw() {
         ctx.fillStyle = c;
         ctx.fillText('-- 模态' + (i+1), 230 + i * 85, ly);
     });
+
+    // 避障图例（额外一行，上移留足间距，避免遮住下方主图例文字）
+    if (avoidData) {
+        const aly = ly - 36;
+        ctx.fillStyle = '#f59e0b';
+        ctx.fillRect(10, aly - 7, 14, 14);
+        ctx.fillStyle = '#92400e';
+        ctx.fillText('障碍物', 28, aly + 4);
+        ctx.strokeStyle = '#f97316';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 4]);
+        ctx.beginPath();
+        ctx.moveTo(90, aly);
+        ctx.lineTo(150, aly);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#f97316';
+        ctx.fillText('-- 状态机模拟路径（非模型输出）', 155, aly + 4);
+    }
 }
 
 // ── 自适应缩放：把观测+预测+真值轨迹收进画布 ─────────
@@ -551,6 +620,11 @@ function autoFitView() {
     if (groundTruth && points.length > 0) {
         var lp = points[points.length - 1];
         groundTruth.forEach(function(pt) { all.push([lp.mx + pt[0], lp.my + pt[1]]); });
+    }
+    if (avoidData && avoidData.avoidance && avoidData.avoidance.path && points.length > 0) {
+        avoidData.avoidance.path.forEach(function(pt) { all.push([pt[0], pt[1]]); });
+        var lp = points[points.length - 1];
+        all.push([lp.mx + avoidData.obstacle.x, lp.my + avoidData.obstacle.y]);
     }
     if (all.length < 2) return;
 
@@ -596,6 +670,19 @@ canvas.addEventListener('mousedown', function(e) {
     if (e.button !== 0) return;
 
     const c = canvasCoords(e);
+
+    // 障碍物拖拽：优先于节点命中（障碍物在 ego 前方，可能与某个观测点重叠）
+    if (avoidData && avoidData.obstacle && points.length > 0) {
+        const lastPt = points[points.length - 1];
+        const ob = avoidData.obstacle;
+        const o = toScreen(lastPt.mx + ob.x, lastPt.my + ob.y);
+        const halfPx = ob.size / 2 * SCALE + 6;
+        if (Math.abs(c.sx - o.x) <= halfPx && Math.abs(c.sy - o.y) <= halfPx) {
+            draggingObstacle = true;
+            return;
+        }
+    }
+
     const target = drawNeighborMode ? neighborPoints : points;
 
     for (let i = 0; i < target.length; i++) {
@@ -612,13 +699,28 @@ canvas.addEventListener('mousedown', function(e) {
         target.push({ mx: m.x, my: m.y });
         predData = null;
         groundTruth = null;
+        avoidData = null;
         hideCards();
         draw();
     }
 });
 
-canvas.addEventListener('mouseup', function() { selectedIdx = null; isPanning = false; });
-canvas.addEventListener('mouseleave', function() { selectedIdx = null; isPanning = false; });
+canvas.addEventListener('mouseup', function() {
+    selectedIdx = null;
+    isPanning = false;
+    if (draggingObstacle) {
+        draggingObstacle = false;
+        recalcAvoid();
+    }
+});
+canvas.addEventListener('mouseleave', function() {
+    selectedIdx = null;
+    isPanning = false;
+    if (draggingObstacle) {
+        draggingObstacle = false;
+        recalcAvoid();
+    }
+});
 
 // ── 右键拖拽平移 + 缩放 ───────────────────────────
 canvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
@@ -631,6 +733,15 @@ canvas.addEventListener('mousemove', function(e) {
         ORIGIN_Y += dy;
         panStartX = e.clientX;
         panStartY = e.clientY;
+        draw();
+        return;
+    }
+    if (draggingObstacle) {
+        const c = canvasCoords(e);
+        const m = toMeter(c.sx, c.sy);
+        const lastPt = points[points.length - 1];
+        avoidData.obstacle.x = m.x - lastPt.mx;
+        avoidData.obstacle.y = m.y - lastPt.my;
         draw();
         return;
     }
@@ -747,6 +858,7 @@ async function loadExample(name) {
         syncNeighborModeBtn();
         predData = null;
         groundTruth = null;
+        avoidData = null;
         resetView();
         hideCards();
         draw();
@@ -754,6 +866,100 @@ async function loadExample(name) {
     } catch (e) {
         showToast(e.message, 'error');
     }
+}
+
+// ── 避障示例 ──────────────────────────────────────
+async function loadAvoidExample() {
+    // 生成直线 ego 轨迹（y=0），与默认障碍物 (2.0, 0.2) 形成「正前方会撞」场景
+    var obs = [];
+    for (var i = 0; i < OBS_MIN; i++) {
+        obs.push([i * 0.2, 0.0]);
+    }
+    points = obs.map(function(xy) { return { mx: xy[0], my: xy[1] }; });
+    neighborPoints = [];
+    drawNeighborMode = false;
+    syncNeighborModeBtn();
+    predData = null;
+    groundTruth = null;
+    avoidData = null;
+    resetView();
+
+    try {
+        var result = await apiFetch('/api/v1/avoid', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ trajectory: obs }),
+        });
+        if (!result.success) {
+            showToast('避障示例失败: ' + result.error, 'error');
+            return;
+        }
+        predData = result.data;
+        avoidData = result.data;
+        groundTruth = null;
+        updateAvoidUI(result.data);
+        autoFitView();
+        draw();
+        showToast('避障示例：预测发现碰撞 → 状态机减速绕行', 'info');
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
+async function recalcAvoid() {
+    // 障碍物松手后：用当前观测轨迹 + 新障碍物位置重新请求避障决策
+    if (!avoidData || points.length === 0) return;
+    const traj = points.map(function(p) { return [p.mx, p.my]; });
+    const ob = avoidData.obstacle;
+    try {
+        const result = await apiFetch('/api/v1/avoid', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ trajectory: traj, obstacle: { x: ob.x, y: ob.y, size: ob.size } }),
+        });
+        if (!result.success) {
+            showToast('重新计算避障失败: ' + result.error, 'error');
+            return;
+        }
+        predData = result.data;
+        avoidData = result.data;
+        updateAvoidUI(result.data);
+        draw();
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
+function updateAvoidUI(data) {
+    updateUI(data);  // 复用摘要/概率条/详情表（summary/statistics 已在 data 里）
+
+    // 覆盖碰撞框为避障文案（updateUI 已按两车口径隐藏，这里重新显示）
+    var box = document.getElementById('collisionBox');
+    var ac = data.avoidance.collision;
+    box.style.display = '';
+    if (ac.warning) {
+        box.style.background = '#fef3c7';
+        box.style.color = '#92400e';
+        box.textContent = '⚠️ 避障触发：预测最优模态轨迹距障碍物最近 ' + ac.d_col.toFixed(2) + 'm（margin ' + ac.margin + 'm）';
+    } else {
+        box.style.background = '#d1fae5';
+        box.style.color = '#065f46';
+        box.textContent = '✓ 预测轨迹未碰撞障碍物';
+    }
+
+    // 避障详情：绕行方向 + 左右占据 + 状态机说明
+    var av = data.avoidance;
+    var left = av.left_count, right = av.right_count;
+    var dir = (left !== right)
+        ? (left < right ? '向左绕（左侧空隙大）' : '向右绕（右侧空隙大）')
+        : '默认向右绕';
+    var box2 = document.getElementById('avoidBox');
+    box2.style.display = '';
+    box2.innerHTML =
+        '<strong>绕行选向：</strong>' + dir + '（左半区占据 ' + left + ' 格 / 右半区 ' + right + ' 格）<br>' +
+        '<strong>决策：</strong>状态机 3 状态（直行 / 减速绕行 / 停车侧移）+ 滞回 + 防抖，逐帧输出 vx/vy<br>' +
+        '<strong>说明：</strong>绕行路径为状态机模拟路径（<strong>非模型输出</strong>）；' + av.note + '<br>' +
+        '<strong>交互：</strong>拖动橙色障碍物方块可调整位置，松手后自动重算避障';
 }
 
 // ── 画邻居车模式切换 ───────────────────────────────
@@ -833,6 +1039,7 @@ async function handleCSV(event) {
 
         predData = data;
         groundTruth = data.ground_truth || null;
+        avoidData = null;
         updateUI(data);
         autoFitView();
         draw();
@@ -929,6 +1136,7 @@ function hideCards() {
     document.getElementById('summaryCard').style.display = 'none';
     document.getElementById('detailCard').style.display = 'none';
     document.getElementById('probCard').style.display = 'none';
+    document.getElementById('avoidBox').style.display = 'none';
 }
 
 function clearAll() {
@@ -940,6 +1148,7 @@ function clearAll() {
     selectedIsNeighbor = false;
     predData = null;
     groundTruth = null;
+    avoidData = null;
     resetView();
     hideCards();
     draw();

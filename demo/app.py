@@ -36,6 +36,10 @@ HIDDEN_DIM = 128
 NUM_MODES = 5         # K=5 多模态
 # 项目根目录（绝对路径，避免相对路径依赖 cwd 导致找不到模型文件）
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# 避障决策纯逻辑（与实车节点共用同一份，避免 demo 复制第二份逻辑）
+sys.path.insert(0, os.path.join(BASE_DIR, "deploy", "ros_node"))
+from avoidance_core import AvoidanceStateMachine, check_collision, side_occupancy
 # 加载 Stage B（NLL 校准后）的定稿模型：轨迹参数与 s3_组B交互_scheme2c 完全一致
 # （Stage B 冻结轨迹只训不确定性头），但共享不确定性头已校准，不再恒输出 softplus(0)=0.693。
 CHECKPOINT_PATH = os.path.join(BASE_DIR, "outputs", "checkpoints", "unc_stage_b", "best_model.pt")
@@ -305,6 +309,145 @@ def run_inference_pair(ego_obs: np.ndarray, neighbor_obs: np.ndarray = None) -> 
     return {"success": True, "data": data}
 
 
+# ── 避障演示：模拟障碍物 → 碰撞检测 → 状态机减速绕行 ──────────────
+# demo 速度口径与预测分布一致（2 m/s），区别于实车 0.11 m/s；障碍物坐标在
+# ego 末观测帧坐标系（x 前进方向），与 run_inference_pair 输出同系，三者对齐。
+AVOID_PARAMS = dict(
+    max_vx=2.0,       # 巡航速度 2 m/s（对齐示例轨迹速度分布）
+    slow_start=2.0,   # 距障碍物 2m 开始减速
+    safe_stop=0.5,    # 距障碍物 0.5m 触发停车（全向底盘仍可侧移脱困）
+    lat_vy=0.6,       # 绕行横向速度 0.6 m/s
+    hyst=0.2,
+    side_thresh=0.05,
+    clear_frames=5,
+)
+AVOID_GRID_RES = 0.05
+AVOID_X_RANGE = (0.0, 6.0)     # demo 里 ego 在原点，x 从 0 起（不沿用实车 0.15）
+AVOID_Y_RANGE = (-3.0, 3.0)    # y 至少 ±3m，侧移绕行不落出栅格
+AVOID_MARGIN = 0.15            # 车半宽 + 余量（与实车同一口径）
+
+
+def build_obstacle_grid(obs_center, obs_size, grid_res, x_range, y_range):
+    """障碍物中心 + 尺寸 → 占据栅格（矩形方块栅格化）。
+
+    前端只传「中心 + 尺寸（0.3×0.3）」，后端按方块栅格化，避免仅占一个点格
+    导致触发距离晚半格、减速曲线不自然。
+    """
+    x_min, x_max = x_range
+    y_min, y_max = y_range
+    nx = int((x_max - x_min) / grid_res)
+    ny = int((y_max - y_min) / grid_res)
+    grid = np.zeros((ny, nx), dtype=bool)
+    half = obs_size / 2.0
+    x0, x1 = obs_center[0] - half, obs_center[0] + half
+    y0, y1 = obs_center[1] - half, obs_center[1] + half
+    ix0 = max(0, int((x0 - x_min) / grid_res))
+    ix1 = min(nx, int(np.ceil((x1 - x_min) / grid_res)))
+    iy0 = max(0, int((y0 - y_min) / grid_res))
+    iy1 = min(ny, int(np.ceil((y1 - y_min) / grid_res)))
+    if ix1 > ix0 and iy1 > iy0:
+        grid[iy0:iy1, ix0:ix1] = True
+    return grid, x_min, y_min
+
+
+def geometric_d_col(ego_xy, obs_center, obs_size, margin):
+    """逐帧几何距离（数学上等价 check_corridor，但无累计误差）。
+
+    d_col = ego 当前位置到障碍物前缘的前向距离；已绕过（障碍物在身后 / 横向
+    让出安全距离）返回 None，状态机据此退出 AVOIDING。
+
+    判定口径与 check_corridor 一致：|横向偏移| > 障碍物半宽 + margin（车半宽+余量）
+    即视为直线前进不再碰撞。
+    """
+    dx = obs_center[0] - ego_xy[0]   # 前向距离
+    dy = obs_center[1] - ego_xy[1]   # 横向偏移
+    half = obs_size / 2.0
+    if dx < -half:                     # 障碍物已在身后
+        return None, dy
+    if abs(dy) > half + margin:        # 已横向让出安全距离
+        return None, dy
+    return max(0.0, dx - half), dy     # 到障碍物前缘距离
+
+
+def run_avoidance(ego_obs, obstacle):
+    """避障演示：best-mode 预测 → 碰撞检测 → 状态机逐帧决策 → 绕行路径。
+
+    返回:
+        - 模型 5 条预测轨迹 + best mode
+        - 碰撞检测（best mode 是否穿过障碍物，栅格口径）
+        - 状态机逐帧决策（状态 / d_col / vx / vy）与绕行模拟路径
+    """
+    obs_center, obs_size = obstacle
+
+    # 1. 单车预测（demo 避障用单车 best mode，展示「预测层」发现未来碰撞）
+    pred = run_inference_pair(ego_obs, None)
+    data = pred["data"]
+    best_idx = int(np.argmax(data["probabilities"]))
+    best_rel = np.array(data["trajectories_relative"][best_idx], dtype=np.float32)
+    best_abs = np.array(data["trajectories"][best_idx], dtype=np.float32)
+
+    # 2. 障碍物占据栅格（供 check_collision 一次 + side_occupancy 选向）
+    grid, gx_min, gy_min = build_obstacle_grid(
+        obs_center, obs_size, AVOID_GRID_RES, AVOID_X_RANGE, AVOID_Y_RANGE)
+
+    # 3. 碰撞检测：best mode 轨迹（补原点，使累计弧长 = 从 ego 当前位置起算）
+    best_rel_origin = np.vstack([np.zeros((1, 2), dtype=np.float32), best_rel])
+    d_traj, y_traj = check_collision(
+        best_rel_origin, grid, AVOID_GRID_RES, gx_min, gy_min, AVOID_MARGIN)
+
+    # 4. 左右半区占据统计（绕行选向：占据少的一侧空隙更大，优先往该侧绕）
+    left_count, right_count = side_occupancy(
+        grid, AVOID_GRID_RES, gx_min, gy_min, AVOID_PARAMS["slow_start"])
+
+    # 5. 状态机逐帧避障模拟（几何 d_col 逐帧更新，绕过后自然退出 AVOIDING）
+    sm = AvoidanceStateMachine(**AVOID_PARAMS)
+    dt = 0.1  # 10Hz，与预测帧率一致
+    ego_pos = np.array([0.0, 0.0], dtype=np.float64)
+    avoid_path = [ego_pos.copy()]
+    frames = []
+    for t in range(PRED_LEN):
+        d_col, obs_y = geometric_d_col(ego_pos, obs_center, obs_size, AVOID_MARGIN)
+        vx, vy, w = sm.step(d_col, obs_y, left_count, right_count)
+        ego_pos[0] += vx * dt
+        ego_pos[1] += vy * dt
+        avoid_path.append(ego_pos.copy())
+        frames.append({
+            "frame": t + 1,
+            "state": sm.state,
+            "d_col": None if d_col is None else float(d_col),
+            "vx": float(vx),
+            "vy": float(vy),
+            "sign": float(sm.avoid_sign),
+        })
+
+    # 绕行路径还原到用户坐标（加回 ego 末帧）
+    ego_last = np.array(data["last_point"], dtype=np.float64)
+    avoid_abs = (np.array(avoid_path) + ego_last).tolist()
+
+    # 复用单车预测的完整字段（summary/statistics/uncertainties 等），
+    # 仅追加障碍物与避障结果，前端可同时渲染预测轨迹与绕行路径。
+    data["obstacle"] = {
+        "x": float(obs_center[0]),
+        "y": float(obs_center[1]),
+        "size": float(obs_size),
+    }
+    data["avoidance"] = {
+        "path": avoid_abs,   # 状态机模拟路径（非模型输出）
+        "frames": frames,
+        "params": AVOID_PARAMS,
+        "left_count": int(left_count),
+        "right_count": int(right_count),
+        "note": "全向底盘：停车仍可侧移脱困",
+        "collision": {
+            "warning": d_traj is not None,
+            "d_col": None if d_traj is None else float(d_traj),
+            "margin": AVOID_MARGIN,
+            "best_trajectory": best_abs.tolist(),
+        },
+    }
+    return {"success": True, "data": data}
+
+
 # ── Flask 应用 ────────────────────────────────────────
 app = Flask(__name__)
 
@@ -439,6 +582,38 @@ def predict_csv():
             result["data"]["ground_truth"] = gt.tolist()
 
         result["data"]["full_trajectory_length"] = len(traj)
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ── API: 避障演示 ─────────────────────────────────────
+@app.route("/api/v1/avoid", methods=["POST"])
+def avoid():
+    try:
+        data = request.json or {}
+        if "trajectory" not in data:
+            return jsonify({"success": False, "error": "缺少 trajectory 字段"}), 400
+
+        ego = np.array(data["trajectory"], dtype=np.float32)
+        if len(ego) < OBS_LEN:
+            return jsonify({
+                "success": False,
+                "error": f"观测点数量不足，需要 ≥{OBS_LEN} 个点，当前 {len(ego)} 个",
+            }), 400
+
+        # 障碍物（ego 末观测帧坐标系，x 前进方向）；默认锥桶在前方 2m、
+        # 略偏左 y=+0.2（偏一侧让左右半区计数不对称、触发 side_occupancy 选向）。
+        # 不用 y=+0.35：half+margin=0.30，+0.35 会落到直线前进路径之外不触发避障。
+        obstacle = data.get("obstacle") or {}
+        obs_center = np.array([
+            float(obstacle.get("x", 2.0)),
+            float(obstacle.get("y", 0.2)),
+        ], dtype=np.float64)
+        obs_size = float(obstacle.get("size", 0.3))
+
+        result = run_avoidance(ego[:OBS_LEN], (obs_center, obs_size))
         return jsonify(result)
 
     except Exception as e:
